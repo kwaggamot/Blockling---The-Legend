@@ -31,7 +31,12 @@ body{background:var(--bg);color:var(--ink);font-family:var(--ui);overflow:hidden
 #overlay:empty{display:none}
 .screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--u)*14);
   padding:calc(var(--u)*26) calc(var(--u)*24);text-align:center;background:linear-gradient(180deg,rgba(5,6,16,.25),rgba(5,6,16,.78) 70%)}
+.screen{overflow-y:auto;justify-content:safe center}
 .screen.dim{background:rgba(5,6,16,.72)}
+.reward{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*8);width:100%}
+.reward .opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(calc(var(--u)*120),1fr));gap:calc(var(--u)*8);width:100%}
+.reward button{font-size:calc(var(--u)*13);padding:calc(var(--u)*10) calc(var(--u)*8)}
+.reward .tagline{font-size:calc(var(--u)*11);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700}
 .screen.scroll{justify-content:flex-start;overflow-y:auto}
 .logo{font-family:var(--display);font-size:calc(var(--u)*58);line-height:.95;letter-spacing:.01em;color:var(--mint);
   text-shadow:calc(var(--u)*3) calc(var(--u)*3) 0 #1f9c78,calc(var(--u)*6) calc(var(--u)*6) 0 #0d4a3a,0 0 calc(var(--u)*30) rgba(139,255,214,.35)}
@@ -277,7 +282,7 @@ function worldInfo(wi){
 let AC = null; const lastS = {};
 function initAudio(){ if(AC) { if(AC.state==='suspended') AC.resume(); return; } try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
 function tone(f,d,type='square',v=.06,slide=0,delay=0){
-  if(!AC||!save.sound) return;
+  if(!AC||!save.sound||adPlaying) return;
   const t=AC.currentTime+delay, o=AC.createOscillator(), gn=AC.createGain();
   o.type=type; o.frequency.setValueAtTime(f,t);
   if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,f+slide),t+d);
@@ -594,6 +599,7 @@ function startLevel(L){
      laserT:0, beamT:0, combo:0, comboT:0, maxCombo:0, score:0, damageTaken:0, caught:0, used:0, cursed:0, maxOwn:0, time:0, landed:false,
      intro:INTRO, spawnT:.4, shake:0, flash:0, winT:0, loseT:0, abilCd:0, missions:pickMissions(lv), riftX:W/2, t:0, hurtFlash:0};
   if(g.boss) summonMinions(true);
+  if(pendingBonus){ g.inv[0]=pendingBonus; pendingBonus=null; setTimeout(()=>toast('Your bonus is ready in slot 1'),400); }
   renderBg(g.world); initAmb(g.world);
   setScreen('play');
 }
@@ -1308,6 +1314,81 @@ function drawStory(dt){
 }
 
 // =====================================================================
+//  ADS (only where the host page provides Google's adBreak(), e.g. games.dunescholars.com)
+// =====================================================================
+// Nothing ad-related happens on Levels 1-3. After that:
+//  - a short break may play when the player taps Next on the Level clear screen (Google caps how often);
+//  - optional rewards: the player can choose to watch an ad for one bonus on the Level clear screen,
+//    or to keep going with 2 hearts on the Squashed screen. An offer only appears when an ad is ready.
+// Everywhere else (the artifact, the repo's index.html) adBreak is missing and all of this is skipped.
+const AD_FROM_LEVEL = 4;
+let adPlaying = false, rewardWatched = false, pendingBonus = null;
+const hasAds = () => typeof window.adBreak === 'function';
+function adStart(){ adPlaying=true; try{ if(AC&&AC.state==='running') AC.suspend(); }catch(e){} }
+function adEnd(){ adPlaying=false; try{ if(AC&&AC.state==='suspended') AC.resume(); }catch(e){} }
+function adSound(){ try{ if(typeof window.adConfig==='function') window.adConfig({sound:save.sound?'on':'off', preloadAdBreaks:'auto'}); }catch(e){} }
+// Tapping Next: maybe a short break, then the next level. The level always starts, ad or not.
+function goNext(L){
+  if(!hasAds() || L-1<AD_FROM_LEVEL || rewardWatched){ startLevel(L); return; }
+  let done=false, started=false;
+  const go=()=>{ if(done) return; done=true; adEnd(); startLevel(L); };
+  setScreen('adwait',`<div class="screen dim"><span class="eyebrow">Next up</span><h2>Level ${L}</h2></div>`);
+  setTimeout(()=>{ if(!started) go(); },4000);   // no ad came: carry on
+  setTimeout(go,90000);                          // safety net: never leave the player stuck
+  try{ window.adBreak({type:'next', name:'level-'+L, beforeAd:()=>{ started=true; adStart(); }, afterAd:adEnd, adBreakDone:go}); }catch(e){ go(); }
+}
+function randomFusion(){ const ks=Object.keys(RECIPES), k=ks[(Math.random()*ks.length)|0], [a,b]=k.split('+'); return {k:'f',a,b,name:RECIPES[k].name}; }
+// Level clear: watch an ad for ONE bonus (a free power-up or fusion for the next level, or double shards).
+function offerClearReward(gained){
+  if(!hasAds() || g.L<AD_FROM_LEVEL) return;
+  const box=$('#rewardBox'); if(!box) return;
+  const L=g.L; let choice=null;
+  const opts=[['power','Free power-up']];
+  if(gained>0) opts.push(['shards',`Double shards +${gained} ◆`]);
+  if(fuseOpen()) opts.push(['fusion','Bonus fusion']);
+  try{ window.adBreak({type:'reward', name:'level-bonus',
+    beforeAd:adStart, afterAd:adEnd,
+    beforeReward:(showAdFn)=>{
+      if(!box.isConnected||state!=='clear') return;
+      box.innerHTML=`<span class="tagline">Optional · watch a short ad for one bonus</span><div class="opts">${opts.map(([k,l])=>`<button class="gold" data-rew="${k}">▶ ${l}</button>`).join('')}</div>`;
+      box.hidden=false;
+      box.onclick=e=>{ const b=e.target.closest('[data-rew]'); if(!b||choice) return; choice=b.dataset.rew; box.querySelectorAll('button').forEach(x=>x.disabled=true); showAdFn(); };
+    },
+    adViewed:()=>{
+      rewardWatched=true; let msg='';
+      if(choice==='shards'){ save.shards+=gained; persist(); msg=`+${gained} ◆ shards added.`; }
+      else if(choice==='fusion'){ pendingBonus=randomFusion(); msg=`${pendingBonus.name} will be waiting in slot 1 on your next level.`; }
+      else { const t=pickPower(Math.random,L+1); pendingBonus={k:'p',type:t}; msg=`${POWERS[t].label} will be waiting in slot 1 on your next level.`; }
+      if(box.isConnected) box.innerHTML=`<div class="unlock"><b>BONUS!</b> ${msg}</div>`;
+    },
+    adDismissed:()=>{ rewardWatched=true; if(box.isConnected) box.innerHTML='<p class="note">The ad closed before the end, so no bonus this time.</p>'; },
+    adBreakDone:()=>{} }); }catch(e){}
+}
+// Squashed: watch an ad to carry on the same level with 2 hearts (once per attempt).
+function offerContinue(){
+  if(!hasAds() || g.L<AD_FROM_LEVEL || g.continued) return;
+  const box=$('#rewardBox'); if(!box) return;
+  const run=g; let used=false;
+  try{ window.adBreak({type:'reward', name:'keep-going',
+    beforeAd:adStart, afterAd:adEnd,
+    beforeReward:(showAdFn)=>{
+      if(!box.isConnected||state!=='over'||g!==run) return;
+      box.innerHTML=`<span class="tagline">Optional</span><button class="gold" data-rew="go">▶ Watch an ad to keep going with 2 hearts</button>`;
+      box.hidden=false;
+      box.onclick=e=>{ if(used||!e.target.closest('[data-rew]')) return; used=true; box.querySelector('button').disabled=true; showAdFn(); };
+    },
+    adViewed:()=>{ if(g===run&&state==='over') keepGoing(); },
+    adDismissed:()=>{ if(box.isConnected) box.innerHTML='<p class="note">The ad closed before the end, so the level starts again.</p>'; },
+    adBreakDone:()=>{} }); }catch(e){}
+}
+function keepGoing(){
+  g.continued=true; g.hp=Math.min(2,g.maxHp); g.loseT=0; g.hurtFlash=0; g.shake=0;
+  for(const b of g.balls) if(!b.own) b.dead=true;
+  g.balls=g.balls.filter(b=>!b.dead); g.spawnT=1.8;
+  setScreen('play'); addText(g.p.x,g.p.y-34,'KEEP GOING!','#8bffd6',22); sfx('power');
+}
+
+// =====================================================================
 //  ACTION BAR
 // =====================================================================
 const slotEls=[0,1,2,3].map(i=>$('#s'+i)), fuseEl=$('#fuse'), abilEl=$('#abil'), pauseEl=$('#pause');
@@ -1473,8 +1554,10 @@ function gameOver(){
   setScreen('over',`<div class="screen dim">
     <span class="eyebrow">Level ${g.L} · ${esc(g.world.name)}</span><h2 style="color:var(--hot)">Squashed</h2>
     <p class="tag">${esc(pickTip())}</p>
+    <div id="rewardBox" class="reward" hidden></div>
     <div class="btns"><button class="big" data-act="retry">Try again</button><button data-act="map">Map</button></div>
   </div>`);
+  offerContinue();
 }
 const TIPS=['Hit a ball with the edge of your block to send it sideways.','Save a WALL for when things get busy. It turns every ball at the floor into yours.','Cannons keep firing until you break them.','Bombs are worth aiming for: they clear their neighbours.','Fusing two power-ups is stronger than using both.','You do not need to break steel blocks to clear a level.'];
 const pickTip=()=>TIPS[(Math.random()*TIPS.length)|0];
@@ -1504,8 +1587,10 @@ function finishLevel(){
     <div class="stats"><div><span>Score</span><b>${g.score}</b></div><div><span>Best combo</span><b>×${g.maxCombo}</b></div><div><span>Time</span><b>${Math.round(g.time)}s</b></div></div>
     <ul class="list">${res.map(r=>`<li><span class="pip ${r.ok?'on':''}"></span>${r.text}<span class="r">${r.gain?'+1 ◆':r.ok?'done':''}</span></li>`).join('')}</ul>
     ${unlocks.map(u=>`<div class="unlock">${u}</div>`).join('')}
+    <div id="rewardBox" class="reward" hidden></div>
     <div class="row"><button data-act="map">Map</button><button data-act="retry">Replay</button><button class="big" data-act="next">Next ›</button></div>
   </div>`);
+  rewardWatched=false; offerClearReward(shards);
 }
 
 overlay.addEventListener('click',e=>{
@@ -1529,8 +1614,8 @@ overlay.addEventListener('click',e=>{
     case 'lvl': startLevel(+b.dataset.l); break;
     case 'resume': resume(); break;
     case 'retry': startLevel(g.L); break;
-    case 'next': startLevel(g.L+1); break;
-    case 'sound': save.sound=!save.sound; persist(); b.textContent=`Sound: ${save.sound?'on':'off'}`; break;
+    case 'next': goNext(g.L+1); break;
+    case 'sound': save.sound=!save.sound; persist(); b.textContent=`Sound: ${save.sound?'on':'off'}`; adSound(); break;
     case 'equip': save.equipped=b.dataset.k; persist(); labScreen(); break;
     case 'unequip': save.equipped=null; persist(); labScreen(); break;
     case 'buy': { const k=b.dataset.k, M=MORPHS[k]; if(save.shards>=M.cost){ save.shards-=M.cost; save.morphs[k]=true; save.equipped=k; persist(); sfx('fuse'); labScreen(); } break; }
@@ -1572,7 +1657,7 @@ function frame(now){
   requestAnimationFrame(frame);
 }
 window.__blk={get g(){return g}, get save(){return save}, startLevel, buildLevel, finishLevel, setSave:o=>{Object.assign(save,o);persist();}};
-resize(); titleScreen(); requestAnimationFrame(frame);
+resize(); titleScreen(); adSound(); requestAnimationFrame(frame);
 })();
 </script>
 

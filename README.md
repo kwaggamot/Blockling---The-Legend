@@ -68,6 +68,18 @@ Each level opens with Blockling flying in, telling you "Let's do this!", then tu
 | Any other pair | OVERDRIVE: both effects, 60% longer |
 | Fused + Fused | SUPER BLOCK (ultimate) |
 
+## Ads (only on sites that provide them)
+
+The game itself contains no ad code. If the page it runs on provides Google's standard `adBreak()` call (as games.dunescholars.com does), Blockling uses it like this:
+
+- **Nothing on Levels 1–3.**
+- **A short break** may play after tapping **Next** on the Level clear screen. Google limits how often, and there is never one straight after a reward ad.
+- **Optional rewards**, offered only when an ad is ready and always the player's choice:
+  - Level clear: watch an ad for one bonus (a free power-up or a bonus fusion waiting in slot 1 on the next level, or double the shards just earned).
+  - Squashed: watch an ad to keep going on the same level with 2 hearts (once per attempt).
+
+Anywhere without `adBreak()` (opening `index.html` directly, GitHub Pages) none of this appears.
+
 ## Playing it online
 
 Turn on GitHub Pages for this repository (Settings → Pages → deploy from the `main` branch, root folder) and the game will be served at `https://kwaggamot.github.io/Blockling---The-Legend/`.
