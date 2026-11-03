@@ -13,6 +13,8 @@ A tiny block was born in Super Block World, where size is everything. The Block 
 - **Missions.** Every level has two optional missions that pay out shards.
 - **Worlds.** Ten hand-made worlds, each with its own look and boss, then endless generated worlds after that.
 
+The game opens with an animated story: Blockling is born in Super Block World, gets kicked out by the Block King for being too small, crash-lands in the Exile Plains, and sets off home. You can watch it again from the title screen.
+
 Each level opens with Blockling flying in, telling you "Let's do this!", then turning to face the blocks.
 
 ## Controls
