@@ -6,7 +6,7 @@ A tiny block was born in Super Block World, where size is everything. The Block 
 
 ## How it plays
 
-- **Bounce back.** Red spiky balls are thrown at you. Touch one and it becomes yours. Your balls break blocks. If a red ball gets past you, you lose a heart.
+- **Bounce back.** Red spiky balls are thrown at you. Touch one and it becomes yours. Balls bounce off any side of your block: the top aims them, the sides knock them away, and with the WALL up they can hit the bottom and boost off it, charged and hitting harder. Your balls break blocks. If a red ball gets past you, you lose a heart.
 - **Grow.** Every level you clear makes you one size bigger, from Speck to Monolith at level 10.
 - **Morph.** After the Level 10 boss you stop growing and start changing shape. There are six forms (Spike, Mirror, Magnet, Prism, Phase, Titan), each with a passive and an active ability. Unlock them with ◆ shards from missions and bosses.
 - **Fuse.** From Level 5, merge two stored power-ups into a stronger one. After the first boss, fuse two fusions into the **SUPER BLOCK** ultimate.
@@ -33,7 +33,7 @@ Each level opens with Blockling flying in, telling you "Let's do this!", then tu
 |---|---|---|
 | GROW | Double your width for 10s | 1 |
 | ×2 | Double every ball you own | 1 |
-| WALL | A floor that bounces every ball back for 10s and turns red balls into yours | 1 |
+| WALL | A floor that bounces every ball back for 10s and turns red balls into yours. Balls it sends up into the bottom of your block bounce off faster | 1 |
 | SLOW | Enemy balls crawl for 8s | 1 |
 | FIRE | Your balls burn straight through blocks for 8s | 1 |
 | +HP | Restore one heart and clear every power-down | 1 |

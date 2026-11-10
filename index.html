@@ -185,7 +185,7 @@ const BOSSS = ['Warden','Colossus','Monarch','Cube','Tyrant','Golem','Sentinel',
 const POWERS = {
   grow:  {label:'GROW', color:'#7cff6b', from:1, desc:'Double your width for 10s'},
   multi: {label:'×2',   color:'#5ee6ff', from:1, desc:'Double every ball you own'},
-  shield:{label:'WALL', color:'#a08cff', from:1, desc:'A floor that bounces every ball back for 10s, and turns red balls into yours'},
+  shield:{label:'WALL', color:'#a08cff', from:1, desc:'A floor that bounces every ball back for 10s and turns red balls into yours. Balls it sends up into the bottom of your block bounce off faster'},
   slow:  {label:'SLOW', color:'#ffd36e', from:1, desc:'Enemy balls crawl for 8s'},
   fire:  {label:'FIRE', color:'#ff7a3d', from:1, desc:'Your balls burn straight through blocks for 8s'},
   laser: {label:'LASER',color:'#ff5d9e', from:3, desc:'Shoot lasers from both corners for 8s'},
@@ -309,6 +309,7 @@ function sfx(k,x=0){
     case 'laser': tone(1300,.04,'square',.018,-700); break;
     case 'ability': tone(200,.3,'sawtooth',.06,700); break;
     case 'shield': tone(720,.06,'sine',.05); break;
+    case 'boost': tone(520,.09,'square',.05,520); break;
     case 'boss': tone(170,.12,'square',.05,-50); break;
     case 'click': tone(600,.04,'triangle',.04); break;
     case 'curse': [330,262,196].forEach((f,i)=>tone(f,.12,'square',.05,0,i*.07)); break;
@@ -639,7 +640,8 @@ function blockColor(b){
   return [hsl(hue,78,64),hsl(hue,70,44)];
 }
 const ghostAlpha = b => .5+.5*Math.sin(g.t*1.6+b.ph);
-const ballDmg = () => (g.fx.ult>0?3:1)*(morph()==='spike'?2:1);
+const charged = b => !!(b&&b.own&&Math.hypot(b.vx,b.vy)>ownSpeed(g.L)*1.3);
+const ballDmg = b => (g.fx.ult>0?3:1)*(morph()==='spike'?2:1)+(charged(b)?1:0);
 
 function hitBlock(bl,dmg,src){
   if(bl.dead) return;
@@ -706,16 +708,52 @@ function reflectRect(b,rx,ry,rw,rh){
 }
 function fixAngle(b){ const s=Math.hypot(b.vx,b.vy); if(Math.abs(b.vy)<s*.28){ b.vy=Math.sign(b.vy||-1)*s*.28; b.vx=Math.sign(b.vx||1)*Math.sqrt(s*s-b.vy*b.vy); } }
 function circRect(b,x,y,w,h){ if(b.x+b.r<x||b.x-b.r>x+w||b.y+b.r<y||b.y-b.r>y+h) return false; const cx=clamp(b.x,x,x+w), cy=clamp(b.y,y,y+h), dx=b.x-cx, dy=b.y-cy; return dx*dx+dy*dy<=b.r*b.r; }
-function paddle(b,px){
-  const p=g.p, l=px-p.w/2, r=px+p.w/2;
-  if(b.y+b.r>=p.y && b.y<p.y+p.h*.7 && b.x+b.r>=l && b.x-b.r<=r){
-    const rel=clamp((b.x-px)/(p.w/2+b.r),-1,1), a=rel*1.0;
-    const sp=ownSpeed(g.L)*(g.fx.ult>0?1.08:1);
-    b.vx=Math.sin(a)*sp; b.vy=-Math.cos(a)*sp; b.y=p.y-b.r-.5; b.hits.clear();
-    if(!b.own){ b.own=true; g.score+=5; sfx('convert'); burst(b.x,b.y,'#8bffd6',6,120,2.5); } else sfx('bounce');
-    p.squash=1; return true;
+// Your block is a solid, rounded, moving body: balls can hit its top, sides or bottom.
+// Top: you aim the ball with where it lands (edges send it sideways) and your movement adds spin.
+// Sides: a real bounce off a moving wall, with a little lift so a well-timed swipe can save a ball.
+// Bottom (when the WALL bounces a ball up under you): it rebounds harder and picks up speed.
+const MAX_BOOST = 1.8;
+function paddle(b,px,pvx){
+  const p=g.p, l=px-p.w/2, r=px+p.w/2, t=p.y, bot=p.y+p.h, rad=Math.min(7,p.h*.32);
+  if(b.x+b.r<l||b.x-b.r>r||b.y+b.r<t||b.y-b.r>bot) return false;
+  // closest point on the rounded box (an inner box grown by the corner radius)
+  const ix=clamp(b.x,l+rad,r-rad), iy=clamp(b.y,t+rad,bot-rad);
+  let nx=b.x-ix, ny=b.y-iy, d=Math.hypot(nx,ny);
+  if(d>=b.r+rad) return false;
+  if(d<1e-6){ // centre inside the box: push out the shortest way
+    const dl=b.x-l, dr=r-b.x, dt=b.y-t, db=bot-b.y, m=Math.min(dl,dr,dt,db);
+    nx=m===dl?-1:m===dr?1:0; ny=m===dt?-1:m===db?1:0; if(!nx&&!ny) ny=-1; d=0;
+  } else { nx/=d; ny/=d; }
+  // only react if the ball is moving into the block (relative to the block's own movement)
+  const rvx=b.vx-pvx, rvy=b.vy;
+  if(rvx*nx+rvy*ny>=0 && d>0) return false;
+  const os=ownSpeed(g.L)*(g.fx.ult>0?1.08:1), cur=Math.hypot(b.vx,b.vy);
+  const rel=clamp((b.x-px)/(p.w/2+b.r),-1,1), spin=clamp(pvx/1600,-.28,.28);
+  let face;
+  if(ny<-.55){ // top: classic aiming
+    face='top';
+    const a=clamp(rel*1.0+spin,-1.15,1.15), sp=Math.max(os,Math.min(cur*.97,os*MAX_BOOST));
+    b.vx=Math.sin(a)*sp; b.vy=-Math.cos(a)*sp;
+    b.y=t-b.r-.5;
+  } else if(ny>.55){ // bottom: rebound downward and gain speed
+    face='bottom';
+    const a=clamp(rel*.9+spin+rand(-.22,.22),-1.1,1.1), sp=Math.min(Math.max(cur,os)*1.15+30,os*MAX_BOOST);
+    b.vx=Math.sin(a)*sp; b.vy=Math.cos(a)*sp;
+    b.y=bot+b.r+.5;
+  } else { // side: reflect off a moving wall, then a little lift
+    face='side';
+    const dot=rvx*nx+rvy*ny;
+    let vx=rvx-2*dot*nx+pvx*.8, vy=rvy-2*dot*ny;
+    vy=Math.min(vy,-os*.35);
+    const sp=clamp(Math.hypot(vx,vy),os*.9,os*1.6), k=sp/(Math.hypot(vx,vy)||1);
+    b.vx=vx*k; b.vy=vy*k;
+    b.x=ix+nx*(b.r+rad+.5); b.y=Math.min(b.y,iy+ny*(b.r+rad+.5));
   }
-  return false;
+  b.hits.clear(); p.squash=face==='bottom'?.6:1;
+  if(!b.own){ b.own=true; g.score+=5; sfx('convert'); burst(b.x,b.y,'#8bffd6',6,120,2.5); }
+  else if(face==='bottom'){ sfx('boost'); burst(b.x,b.y,'#fff3b0',8,150,2.5); if(g.t-(g.boostT||0)>1.2){ g.boostT=g.t; addText(b.x,p.y+p.h+26,'BOOST!','#fff3b0',15); } }
+  else sfx('bounce');
+  return true;
 }
 function stepBall(b,h){
   b.x+=b.vx*h; b.y+=b.vy*h;
@@ -727,12 +765,12 @@ function stepBall(b,h){
       if(bl.dead) continue;
       if(bl.ghost && ghostAlpha(bl)<.35) continue;
       if(!circRect(b,bl.x,bl.y,bl.w,bl.h)) continue;
-      if(burning && (bl.t!=='s'||g.fx.ult>0)){ if(!b.hits.has(bl)){ b.hits.add(bl); hitBlock(bl,ballDmg()+ (g.fx.ult>0?0:1),b); } continue; }
-      reflectRect(b,bl.x,bl.y,bl.w,bl.h); hitBlock(bl,ballDmg(),b); break;
+      if(burning && (bl.t!=='s'||g.fx.ult>0)){ if(!b.hits.has(bl)){ b.hits.add(bl); hitBlock(bl,ballDmg(b)+ (g.fx.ult>0?0:1),b); } continue; }
+      reflectRect(b,bl.x,bl.y,bl.w,bl.h); hitBlock(bl,ballDmg(b),b); break;
     }
-    if(g.boss && !g.boss.dead){ const R=bossRect(); if(circRect(b,R.x,R.y,R.w,R.h)){ reflectRect(b,R.x,R.y,R.w,R.h); bossHit(ballDmg()); } }
+    if(g.boss && !g.boss.dead){ const R=bossRect(); if(circRect(b,R.x,R.y,R.w,R.h)){ reflectRect(b,R.x,R.y,R.w,R.h); bossHit(ballDmg(b)); } }
   } else if(b.y<HUD-20 && b.vy<0){ b.vy=Math.abs(b.vy); }
-  if(b.vy>0){ if(!paddle(b,g.p.x) && morph()==='mirror') paddle(b,W-g.p.x); }
+  if(!paddle(b,g.p.x,g.p.vx||0) && morph()==='mirror') paddle(b,W-g.p.x,-(g.p.vx||0));
   if((g.fx.shield>0||g.fx.ult>0) && b.vy>0 && b.y+b.r>H-16){ b.y=H-16-b.r; b.vy=-Math.abs(b.vy); if(!b.own){b.own=true;} sfx('shield'); }
   if(b.y>H+b.r+4){ b.dead=true; if(!b.own) hurt(); }
 }
@@ -865,6 +903,7 @@ function update(dt){
     const slow=fx.slug>0?.5:1, kx=((keys.left?-1:0)+(keys.right?1:0))*(fx.flip>0?-1:1);
     if(kx){ p.x+=kx*580*slow*dt; p.tx=p.x; } else { p.x+=clamp(p.tx-p.x,-1600*slow*dt,1600*slow*dt); }
     p.x=clamp(p.x,p.w/2,W-p.w/2);
+    p.vx=dt>0?(p.x-(p.lastX??p.x))/dt:0; p.lastX=p.x;
     const turn=g.winT>0||g.loseT>0; // turn back round to face you at the end
     p.eyeK+=((turn?1:0)-p.eyeK)*Math.min(1,dt*8); p.lookUp+=((turn?0:1)-p.lookUp)*Math.min(1,dt*8);
     let nearest=null, nd=1e9; for(const b of g.balls) if(!b.own){ const d=Math.abs(b.y-p.y); if(d<nd){nd=d;nearest=b;} }
@@ -890,6 +929,7 @@ function update(dt){
   const em=enemyMul();
   for(const b of g.balls){
     if(b.dead) continue;
+    if(b.own){ const s=Math.hypot(b.vx,b.vy), os=ownSpeed(g.L); if(s>os*1.02){ const k=Math.max(os/s,1-.22*dt); b.vx*=k; b.vy*=k; } }
     if(b.own && m==='magnet' && b.vy>0 && b.y>H*.42){ const s=Math.hypot(b.vx,b.vy); b.vx+=clamp(p.x-b.x,-1,1)*Math.min(Math.abs(p.x-b.x)*4,420)*dt; const s2=Math.hypot(b.vx,b.vy); b.vx*=s/s2; b.vy*=s/s2; }
     const mul=b.own?1:em; if(mul===0){ continue; }
     const dist=Math.hypot(b.vx,b.vy)*mul*dt, n=Math.max(1,Math.ceil(dist/5)), h=dt*mul/n;
@@ -1068,9 +1108,9 @@ function drawBoss(){
 function drawBall(b){
   const t=b.trail;
   if(b.own){
-    const burning=b.fire||(g&&(g.fx.fire>0||g.fx.ult>0||g.fx.inferno>0)), col=burning?'255,140,60':'139,255,214';
-    for(let i=0;i<t.length;i+=2){ const k=i/t.length; ctx.fillStyle=`rgba(${col},${k*.35})`; ctx.beginPath(); ctx.arc(t[i],t[i+1],b.r*k,0,7); ctx.fill(); }
-    ctx.fillStyle=`rgba(${col},.25)`; ctx.beginPath(); ctx.arc(b.x,b.y,b.r+4,0,7); ctx.fill();
+    const burning=b.fire||(g&&(g.fx.fire>0||g.fx.ult>0||g.fx.inferno>0)), fast=!!g&&charged(b), col=burning?'255,140,60':fast?'255,236,150':'139,255,214';
+    for(let i=0;i<t.length;i+=2){ const k=i/t.length; ctx.fillStyle=`rgba(${col},${k*(fast?.55:.35)})`; ctx.beginPath(); ctx.arc(t[i],t[i+1],b.r*k*(fast?1.15:1),0,7); ctx.fill(); }
+    ctx.fillStyle=`rgba(${col},${fast?.35:.25})`; ctx.beginPath(); ctx.arc(b.x,b.y,b.r+(fast?7:4),0,7); ctx.fill();
     ctx.fillStyle=burning?'#ffb36b':'#c9fff0'; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,7); ctx.fill();
     ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(b.x-2,b.y-2,b.r*.4,0,7); ctx.fill();
   } else {
