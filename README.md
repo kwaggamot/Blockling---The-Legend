@@ -80,6 +80,10 @@ The game itself contains no ad code. If the page it runs on provides Google's st
 
 Anywhere without `adBreak()` (opening `index.html` directly, GitHub Pages) none of this appears.
 
+## Saving progress to a player account (only on sites that provide it)
+
+If the page provides `window.dsAccount` (games.dunescholars.com's accounts helper, `/accounts/client.js`), a signed-in player with a profile gets a copy of their progress in their account, so they can carry on from another device. The browser save (`blockling-save-v1`) stays the main save. On start the two copies are compared: the one further along (higher level reached, then the newest) is kept, and level missions and best scores from both are combined. Nothing is uploaded until the account copy has been checked, so a new device never overwrites real progress. The title screen shows a sign-in link or a "saved to your account" line; it never shows the player's nickname.
+
 ## Playing it online
 
 Turn on GitHub Pages for this repository (Settings → Pages → deploy from the `main` branch, root folder) and the game will be served at `https://kwaggamot.github.io/Blockling---The-Legend/`.

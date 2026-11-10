@@ -58,6 +58,8 @@ button.gold{background:var(--gold);color:#3a2600;border-color:#c48a00;border-bot
 button:disabled{opacity:.45;cursor:default}
 a.ghost{text-decoration:none;display:inline-flex;align-items:center;padding:calc(var(--u)*11) calc(var(--u)*14);border-radius:calc(var(--u)*10)}
 a.ghost:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.acct{font-size:calc(var(--u)*12);letter-spacing:.06em;color:var(--mint);font-weight:700;text-transform:none}
+a.ghost.acct{color:var(--mint);text-decoration:underline;text-underline-offset:3px;text-transform:none;letter-spacing:.04em}
 .ghost{background:transparent;border-color:transparent;border-bottom-width:2px;color:var(--muted);font-family:var(--ui);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:calc(var(--u)*12)}
 .card{background:rgba(18,22,49,.88);border:2px solid var(--line);border-radius:calc(var(--u)*14);padding:calc(var(--u)*14);width:100%;text-align:left}
 .list{display:flex;flex-direction:column;gap:calc(var(--u)*8);width:100%;margin:0;padding:0;list-style:none;text-align:left}
@@ -258,7 +260,60 @@ const esc = s => String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>'
 const defSave = () => ({maxLevel:1, shards:0, morphs:{}, equipped:null, missions:{}, best:{}, sound:true, seenStory:false});
 function loadSave(){ try{ const s = JSON.parse(localStorage.getItem(SAVE_KEY)); if(s && typeof s==='object') return Object.assign(defSave(), s); }catch(e){} return defSave(); }
 let save = loadSave();
-function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(e){} }
+function persist(){ save.savedAt=Date.now(); try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }catch(e){} cloudSave(); }
+
+// ---------- account copy (only where the host page provides window.dsAccount, e.g. games.dunescholars.com)
+// The browser save stays the main save. When a player is signed in with a profile, a copy is kept in the
+// account. On start the two are compared and the one further along wins; missions and best scores are
+// combined. Nothing is uploaded until the account copy has been checked, so a new device never overwrites it.
+const account={known:false, signedIn:false, profile:false, synced:false};
+function cloudSave(){
+  const A=window.dsAccount; if(!A||!account.synced) return;
+  try{ A.save('blockling', JSON.parse(JSON.stringify(save))); }catch(e){}
+}
+function cleanSave(o){
+  if(!o||typeof o!=='object'||Array.isArray(o)) return null;
+  const n=(v,min,max)=>Number.isFinite(+v)?Math.max(min,Math.min(max,Math.floor(+v))):min;
+  const out={maxLevel:n(o.maxLevel,1,1e6), shards:n(o.shards,0,1e7), savedAt:n(o.savedAt,0,1e14), morphs:{}, equipped:null, missions:{}, best:{}};
+  if(o.morphs&&typeof o.morphs==='object') for(const k in MORPHS) if(o.morphs[k]===true) out.morphs[k]=true;
+  if(typeof o.equipped==='string'&&out.morphs[o.equipped]) out.equipped=o.equipped;
+  if(o.missions&&typeof o.missions==='object') for(const k in o.missions){ const L=+k, v=o.missions[k]; if(Number.isInteger(L)&&L>0&&L<1e6&&Array.isArray(v)) out.missions[L]=[v[0]?1:0,v[1]?1:0]; }
+  if(o.best&&typeof o.best==='object') for(const k in o.best){ const L=+k, v=+o.best[k]; if(Number.isInteger(L)&&L>0&&L<1e6&&Number.isFinite(v)&&v>=0) out.best[L]=Math.floor(v); }
+  return out;
+}
+function mergeRemote(raw){
+  const r=cleanSave(raw); if(!r) return false;
+  const ahead=r.maxLevel>save.maxLevel||(r.maxLevel===save.maxLevel&&r.savedAt>(save.savedAt||0));
+  const base=ahead?r:save;
+  const m={maxLevel:Math.max(r.maxLevel,save.maxLevel), shards:base.shards, morphs:Object.assign({},save.morphs,r.morphs), equipped:base.equipped, missions:{}, best:{}};
+  for(const src of [save.missions,r.missions]) for(const L in src){ const a=m.missions[L]||[0,0], b=src[L]||[0,0]; m.missions[L]=[(a[0]||b[0])?1:0,(a[1]||b[1])?1:0]; }
+  for(const src of [save.best,r.best]) for(const L in src) m.best[L]=Math.max(m.best[L]||0,+src[L]||0);
+  if(m.equipped&&!m.morphs[m.equipped]) m.equipped=null;
+  const before=save.maxLevel;
+  Object.assign(save,m);
+  if(ahead&&r.maxLevel>1) save.seenStory=true;
+  return save.maxLevel>before;
+}
+function accountSync(){
+  const A=window.dsAccount; if(!A) return;
+  A.ready.then(r=>{
+    account.known=true; account.signedIn=!!(r&&r.signedIn); account.profile=!!(r&&r.profile);
+    if(!account.profile){ refreshMenu(); return; }
+    return A.load('blockling').then(remote=>{
+      const moved=mergeRemote(remote);
+      account.synced=true; persist();
+      if(moved) toast(`Progress loaded from your account: Level ${save.maxLevel}`);
+      refreshMenu();
+    });
+  }).catch(()=>{});
+}
+function refreshMenu(){ if(state==='title') titleScreen(); else if(state==='map') mapScreen(); else if(state==='lab') labScreen(); }
+function accountLine(){
+  if(!window.dsAccount||!account.known) return '';
+  if(account.profile) return `<span class="acct">✓ Progress is saved to your account</span>`;
+  if(account.signedIn) return `<a class="ghost acct" href="/account/">Pick a player profile to save progress</a>`;
+  return `<a class="ghost acct" href="/account/">Sign in to save progress on any device</a>`;
+}
 
 const sizeStage = () => Math.min(10, save.maxLevel);
 const morphOpen = () => save.maxLevel > 10;
@@ -1477,7 +1532,8 @@ function titleScreen(){
       <div class="row"><button data-act="howto">How to play</button><button data-act="powers">Power list</button></div>
     </div>
     <div class="row" style="gap:calc(var(--u)*4)">${HOME_URL?`<a class="ghost" href="${esc(HOME_URL)}">‹ All games</a>`:''}<button class="ghost" data-act="watchstory">Story</button><button class="ghost" data-act="sound">Sound: ${save.sound?'on':'off'}</button></div>
-    <div style="height:calc(var(--u)*120)"></div>
+    ${accountLine()}
+    <div style="height:calc(var(--u)*100)"></div>
   </div>`);
 }
 function storyScreen(i=0){
@@ -1697,7 +1753,7 @@ function frame(now){
   requestAnimationFrame(frame);
 }
 window.__blk={get g(){return g}, get save(){return save}, startLevel, buildLevel, finishLevel, setSave:o=>{Object.assign(save,o);persist();}};
-resize(); titleScreen(); adSound(); requestAnimationFrame(frame);
+resize(); titleScreen(); adSound(); accountSync(); requestAnimationFrame(frame);
 })();
 </script>
 
