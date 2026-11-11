@@ -59,6 +59,12 @@ button:disabled{opacity:.45;cursor:default}
 a.ghost{text-decoration:none;display:inline-flex;align-items:center;padding:calc(var(--u)*11) calc(var(--u)*14);border-radius:calc(var(--u)*10)}
 a.ghost:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .acct{font-size:calc(var(--u)*12);letter-spacing:.06em;color:var(--mint);font-weight:700;text-transform:none}
+.acct a{color:var(--mint);text-underline-offset:3px}
+.lb{display:flex;flex-direction:column;gap:calc(var(--u)*6);width:100%;box-sizing:border-box}
+.unlock,.card,.list li,.stats div{box-sizing:border-box}
+.lb:empty{display:none}
+.sticky-actions{position:sticky;bottom:calc(var(--u)*-26);margin-bottom:calc(var(--u)*-26);padding:calc(var(--u)*12) 0 calc(var(--u)*26);background:linear-gradient(rgba(8,10,23,0),rgba(8,10,23,.94) 35%);z-index:2}
+.lb .unlock{font-size:calc(var(--u)*13)}
 a.ghost.acct{color:var(--mint);text-decoration:underline;text-underline-offset:3px;text-transform:none;letter-spacing:.04em}
 .ghost{background:transparent;border-color:transparent;border-bottom-width:2px;color:var(--muted);font-family:var(--ui);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:calc(var(--u)*12)}
 .card{background:rgba(18,22,49,.88);border:2px solid var(--line);border-radius:calc(var(--u)*14);padding:calc(var(--u)*14);width:100%;text-align:left}
@@ -274,7 +280,7 @@ function cloudSave(){
 function cleanSave(o){
   if(!o||typeof o!=='object'||Array.isArray(o)) return null;
   const n=(v,min,max)=>Number.isFinite(+v)?Math.max(min,Math.min(max,Math.floor(+v))):min;
-  const out={maxLevel:n(o.maxLevel,1,1e6), shards:n(o.shards,0,1e7), savedAt:n(o.savedAt,0,1e14), morphs:{}, equipped:null, missions:{}, best:{}};
+  const out={maxLevel:n(o.maxLevel,1,1e6), shards:n(o.shards,0,1e7), savedAt:n(o.savedAt,0,1e14), bestCombo:n(o.bestCombo,0,1e4), bossTime:n(o.bossTime,0,3600), morphs:{}, equipped:null, missions:{}, best:{}};
   if(o.morphs&&typeof o.morphs==='object') for(const k in MORPHS) if(o.morphs[k]===true) out.morphs[k]=true;
   if(typeof o.equipped==='string'&&out.morphs[o.equipped]) out.equipped=o.equipped;
   if(o.missions&&typeof o.missions==='object') for(const k in o.missions){ const L=+k, v=o.missions[k]; if(Number.isInteger(L)&&L>0&&L<1e6&&Array.isArray(v)) out.missions[L]=[v[0]?1:0,v[1]?1:0]; }
@@ -285,7 +291,8 @@ function mergeRemote(raw){
   const r=cleanSave(raw); if(!r) return false;
   const ahead=r.maxLevel>save.maxLevel||(r.maxLevel===save.maxLevel&&r.savedAt>(save.savedAt||0));
   const base=ahead?r:save;
-  const m={maxLevel:Math.max(r.maxLevel,save.maxLevel), shards:base.shards, morphs:Object.assign({},save.morphs,r.morphs), equipped:base.equipped, missions:{}, best:{}};
+  const bt=[r.bossTime,save.bossTime].filter(v=>v>0);
+  const m={maxLevel:Math.max(r.maxLevel,save.maxLevel), shards:base.shards, bestCombo:Math.max(r.bestCombo,save.bestCombo||0), bossTime:bt.length?Math.min(...bt):0, morphs:Object.assign({},save.morphs,r.morphs), equipped:base.equipped, missions:{}, best:{}};
   for(const src of [save.missions,r.missions]) for(const L in src){ const a=m.missions[L]||[0,0], b=src[L]||[0,0]; m.missions[L]=[(a[0]||b[0])?1:0,(a[1]||b[1])?1:0]; }
   for(const src of [save.best,r.best]) for(const L in src) m.best[L]=Math.max(m.best[L]||0,+src[L]||0);
   if(m.equipped&&!m.morphs[m.equipped]) m.equipped=null;
@@ -301,16 +308,54 @@ function accountSync(){
     if(!account.profile){ refreshMenu(); return; }
     return A.load('blockling').then(remote=>{
       const moved=mergeRemote(remote);
-      account.synced=true; persist();
+      account.synced=true; persist(); lbCatchUp();
       if(moved) toast(`Progress loaded from your account: Level ${save.maxLevel}`);
       refreshMenu();
     });
   }).catch(()=>{});
 }
 function refreshMenu(){ if(state==='title') titleScreen(); else if(state==='map') mapScreen(); else if(state==='lab') labScreen(); }
+// ---------- leaderboards (games.dunescholars.com: dsAccount.submitScore; only for profiles that opted in)
+// Four boards. Scores go out one at a time, at most one every 5.6 s (the site's limit per game),
+// and only when a value improved. A null answer (signed out, not opted in, any error) changes nothing.
+const BOARDS={
+  level:{label:'Furthest level', fmt:v=>'Level '+v},
+  total:{label:'Total score', fmt:v=>v.toLocaleString('en')},
+  combo:{label:'Best combo', fmt:v=>'×'+v},
+  boss:{label:'Fastest boss', fmt:v=>v+'s'},
+};
+const lbQueue=new Map(); let lbBusy=false, lbLast=0;
+const totalScore=()=>Object.values(save.best).reduce((a,v)=>a+(+v||0),0);
+function lbSubmit(board,value){
+  const A=window.dsAccount; if(!A||typeof A.submitScore!=='function'||!account.profile) return;
+  value=Math.floor(+value); if(!Number.isFinite(value)||value<1) return;
+  lbQueue.delete(board); lbQueue.set(board,value); lbPump();
+}
+function lbPump(){
+  if(lbBusy||!lbQueue.size) return;
+  lbBusy=true;
+  setTimeout(()=>{
+    const [board,value]=lbQueue.entries().next().value; lbQueue.delete(board); lbLast=Date.now();
+    let p; try{ p=Promise.resolve(window.dsAccount.submitScore('blockling',board,value)); }catch(e){ p=Promise.resolve(null); }
+    p.then(r=>{ if(r&&r.shown&&r.improved) lbShow(board,r); },()=>{}).then(()=>{ lbBusy=false; lbPump(); });
+  },Math.max(0,lbLast+5600-Date.now()));
+}
+function lbShow(board,r){
+  const box=$('#lbBox'); if(!box||state!=='clear') return;
+  const B=BOARDS[board], ranks=[r.weekRank?`#${r.weekRank} this week`:'', r.rank?`#${r.rank} all time`:''].filter(Boolean).join(' · ');
+  const d=document.createElement('div'); d.className='unlock';
+  d.innerHTML=`<b>NEW BEST · ${esc(B.label.toUpperCase())}</b> ${esc(B.fmt(r.best??0))}${ranks?` · ${esc(ranks)}`:''}`;
+  box.appendChild(d);
+}
+function lbCatchUp(){
+  if(save.maxLevel>1) lbSubmit('level',save.maxLevel-1);
+  const t=totalScore(); if(t>0) lbSubmit('total',t);
+  if(save.bestCombo) lbSubmit('combo',save.bestCombo);
+  if(save.bossTime) lbSubmit('boss',save.bossTime);
+}
 function accountLine(){
   if(!window.dsAccount||!account.known) return '';
-  if(account.profile) return `<span class="acct">✓ Progress is saved to your account</span>`;
+  if(account.profile) return `<span class="acct">✓ Progress is saved to your account · <a href="/leaderboards/">Leaderboards</a></span>`;
   if(account.signedIn) return `<a class="ghost acct" href="/account/">Pick a player profile to save progress</a>`;
   return `<a class="ghost acct" href="/account/">Sign in to save progress on any device</a>`;
 }
@@ -1671,7 +1716,15 @@ function finishLevel(){
   if(L===10&&first){ save.morphs.spike=true; save.equipped='spike'; unlocks.push(`<b>MORPHING UNLOCKED.</b> You are fully grown, so now you change shape. You start as <b>Spike</b>. Unlock more in the Morph Lab.`); unlocks.push(`<b>ULTIMATE UNLOCKED.</b> Fuse two fusions into SUPER BLOCK.`); }
   if(L===4&&first) unlocks.push(`<b>FUSION UNLOCKED.</b> Tap FUSE to merge two stored power-ups.`);
   if(L%10===0&&first&&L<100) unlocks.push(`<b>NEW WORLD:</b> ${esc(worldInfo(L/10).name)}.`);
-  save.shards+=shards; save.best[L]=Math.max(save.best[L]||0,g.score); persist();
+  const prevBest=save.best[L]||0, prevCombo=save.bestCombo||0, prevBoss=save.bossTime||0, bossT=Math.max(1,Math.ceil(g.time));
+  save.shards+=shards; save.best[L]=Math.max(prevBest,g.score);
+  if(g.maxCombo>prevCombo) save.bestCombo=g.maxCombo;
+  if(L===10&&(!prevBoss||bossT<prevBoss)) save.bossTime=bossT;
+  persist();
+  if(first) lbSubmit('level',L);
+  if(save.best[L]>prevBest) lbSubmit('total',totalScore());
+  if(save.bestCombo>prevCombo) lbSubmit('combo',save.bestCombo);
+  if(save.bossTime&&save.bossTime!==prevBoss) lbSubmit('boss',save.bossTime);
   const grew=newSize>prevSize;
   const px=n=>`calc(var(--u)*${(baseW(n)*.55).toFixed(1)})`, py=n=>`calc(var(--u)*${((16+n*1.6)*.9).toFixed(1)})`;
   const growHtml = grew ? `<div class="grow"><div class="hb" style="width:${px(prevSize)};height:${py(prevSize)};opacity:.6"></div><span class="arrow">›</span><div class="hb" style="width:${px(newSize)};height:${py(newSize)}"></div></div>
@@ -1682,9 +1735,10 @@ function finishLevel(){
     ${growHtml}
     <div class="stats"><div><span>Score</span><b>${g.score}</b></div><div><span>Best combo</span><b>×${g.maxCombo}</b></div><div><span>Time</span><b>${Math.round(g.time)}s</b></div></div>
     <ul class="list">${res.map(r=>`<li><span class="pip ${r.ok?'on':''}"></span>${r.text}<span class="r">${r.gain?'+1 ◆':r.ok?'done':''}</span></li>`).join('')}</ul>
+    <div id="lbBox" class="lb"></div>
     ${unlocks.map(u=>`<div class="unlock">${u}</div>`).join('')}
     <div id="rewardBox" class="reward" hidden></div>
-    <div class="row"><button data-act="map">Map</button><button data-act="retry">Replay</button><button class="big" data-act="next">Next ›</button></div>
+    <div class="row sticky-actions"><button data-act="map">Map</button><button data-act="retry">Replay</button><button class="big" data-act="next">Next ›</button></div>
   </div>`);
   rewardWatched=false; offerClearReward(shards);
 }

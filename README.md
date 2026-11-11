@@ -84,6 +84,19 @@ Anywhere without `adBreak()` (opening `index.html` directly, GitHub Pages) none 
 
 If the page provides `window.dsAccount` (games.dunescholars.com's accounts helper, `/accounts/client.js`), a signed-in player with a profile gets a copy of their progress in their account, so they can carry on from another device. The browser save (`blockling-save-v1`) stays the main save. On start the two copies are compared: the one further along (higher level reached, then the newest) is kept, and level missions and best scores from both are combined. Nothing is uploaded until the account copy has been checked, so a new device never overwrites real progress. The title screen shows a sign-in link or a "saved to your account" line; it never shows the player's nickname.
 
+## Leaderboards (only on sites that provide them)
+
+If `window.dsAccount.submitScore` exists, Blockling sends scores to four boards for profiles that opted in to leaderboards:
+
+| Board | What it measures | Wins |
+|---|---|---|
+| `level` · Furthest level | Highest level cleared | Higher |
+| `total` · Total score | Your best score on every level, added up | Higher |
+| `combo` · Best combo | Longest combo in one level | Higher |
+| `boss` · Fastest boss | Seconds to beat the Level 10 boss | Lower |
+
+Scores are only sent when a level is finished and a value improved (plus one catch-up per board when a signed-in player opens the game), one at a time and at most one every 5.6 seconds. When a score is a new best, the Level clear screen shows it with the player's weekly and all-time rank.
+
 ## Playing it online
 
 Turn on GitHub Pages for this repository (Settings → Pages → deploy from the `main` branch, root folder) and the game will be served at `https://kwaggamot.github.io/Blockling---The-Legend/`.
